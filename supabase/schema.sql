@@ -1,6 +1,6 @@
--- NEXORA CRM — initial Supabase schema
--- Run in Supabase SQL Editor after creating a project.
--- Row Level Security ensures users can only access their own records.
+-- NEXORA CRM — Supabase schema
+-- Execute in Supabase SQL Editor. Uses Auth + Row Level Security.
+-- Safe to re-run for the current schema version.
 
 create extension if not exists pgcrypto;
 
@@ -46,21 +46,53 @@ create index if not exists tasks_user_id_idx on public.tasks(user_id);
 create index if not exists deals_client_id_idx on public.deals(client_id);
 create index if not exists tasks_client_id_idx on public.tasks(client_id);
 
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists clients_set_updated_at on public.clients;
+create trigger clients_set_updated_at before update on public.clients
+for each row execute function public.set_updated_at();
+drop trigger if exists deals_set_updated_at on public.deals;
+create trigger deals_set_updated_at before update on public.deals
+for each row execute function public.set_updated_at();
+drop trigger if exists tasks_set_updated_at on public.tasks;
+create trigger tasks_set_updated_at before update on public.tasks
+for each row execute function public.set_updated_at();
+
 alter table public.clients enable row level security;
 alter table public.deals enable row level security;
 alter table public.tasks enable row level security;
 
 drop policy if exists "Users manage their own clients" on public.clients;
 create policy "Users manage their own clients" on public.clients
-  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+for all to authenticated using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
 
 drop policy if exists "Users manage their own deals" on public.deals;
 create policy "Users manage their own deals" on public.deals
-  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+for all to authenticated using (auth.uid() = user_id)
+with check (
+  auth.uid() = user_id
+  and (client_id is null or exists (
+    select 1 from public.clients c
+    where c.id = client_id and c.user_id = auth.uid()
+  ))
+);
 
 drop policy if exists "Users manage their own tasks" on public.tasks;
 create policy "Users manage their own tasks" on public.tasks
-  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+for all to authenticated using (auth.uid() = user_id)
+with check (
+  auth.uid() = user_id
+  and (client_id is null or exists (
+    select 1 from public.clients c
+    where c.id = client_id and c.user_id = auth.uid()
+  ))
+);
 
--- Never expose the Supabase service_role key in a browser app.
--- Use only the project's publishable/anon key on the client, with RLS enabled.
+-- Public browser key is safe only with RLS enabled. Never expose service_role.
